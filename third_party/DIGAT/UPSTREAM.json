@@ -1,0 +1,27 @@
+{
+  "repository": "https://github.com/Veason-silverbullet/DIGAT",
+  "commit": "0408369f20768b34c568f2db3937f276803a2868",
+  "license": "MIT",
+  "source_modified": false,
+  "excluded": "Git metadata, .gitignore, Appendix-B figure assets",
+  "sha256": {
+    "aggregate_result.py": "af255b62d4c2e8cf6e799b1149c86eb396192457219973792e86be38dd8f3c26",
+    "config.py": "34ff8106792f4b1da9d7780c06bc25c7f10ebe5abb7d7a73727169a95b4fac85",
+    "construct_SAG.py": "2b1b5cae40336e2d9baeae0045990a46e57570db71598fecc5745ced4c9f9195",
+    "download_MIND.sh": "e0ee377db35367d8788dabab02974c7b1aeadc9f057caeebf61e70ebce234049",
+    "evaluate.py": "3b5b644dd8eff1d919634e825d668aaf230961e926485f1cfc1658cddcf1c284",
+    "graphEncoders.py": "c3d9f1d8ae460d71dd5385830daef1614bd47e61e8d67ce33be4929e7086fcc7",
+    "install_dependencies.sh": "636d8db5e2e41261d2a11eb9ac08f79f8e4ed1ae2bf075c30eb0d3ad8d2cabaa",
+    "layers.py": "2550999e1af81d3e53b6f054d6ac4403e12237bbf94dfeb2d3617e6ebfb4c35d",
+    "LICENSE": "1b8c526ae7fc0006f67313a7ab89ac7eeb5c25013d8d8ab8b793df0c3a4772bf",
+    "main.py": "e898c6db322302404045f4dba313d05f6137ef23f6d5983f099240a1fd10e717",
+    "MIND_corpus.py": "cc31eb8e60dfaf4644a3de013af13874dccd3bfd415a5ca4ea5979aea4c50011",
+    "MIND_dataset.py": "a7543b2e4f5f5ae6a7ea5e24969227dbdad2d3e296861a0d130523405eeb76da",
+    "model.py": "9526e3ea66db630297066481a8b53ecbff22ac01841c213bd55620a92f999af1",
+    "newsEncoders.py": "273ad67c9ed44084037342a48f5609baa7e95af0c6a0d52dbe14a989d0c7b4d9",
+    "prepare_MIND_dataset.py": "d019aaa5e0a0bc9bfebc882ea5834895d4b9d7f6b0d591e350c779a3f96018b7",
+    "README.md": "970c344db5165862bfa645add58e699c52354cccbb38a8a6e0e27ed0311600e2",
+    "trainer.py": "63dd293431c2e5b9a651a53158d216b6c471f54bfe57bdc45689741b001e961f",
+    "util.py": "bf7ac6ad333e911c6532c844605b17b1209a7ebe76845ded7bb451d08a767a0b"
+  }
+}

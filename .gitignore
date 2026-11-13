@@ -1,0 +1,33 @@
+# Python environments and build caches.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Data, pretrained assets, checkpoints and generated results.
+data/
+datasets/
+private_data/
+downloads/
+assets/
+runs/
+artifacts/
+*.pt
+*.pth
+*.pkl
+*.npy
+*.npz
+*.vec
+*.tsv
+*.safetensors
+*.ckpt
+*.bin
+*.zip
+*.parquet
+*.log
+
+# Local settings and credentials.
+.local/
+.env
+.env.*
+desktop.ini

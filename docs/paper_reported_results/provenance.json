@@ -1,0 +1,40 @@
+{
+  "record_type": "paper_reported_reference_values",
+  "title": "Benefit or Burden?: Using Impression Logs for News Recommendation Systems",
+  "source_scope": "Reported values from the authors' manuscript tables; not new measured results.",
+  "paper_results_reproduced_by_this_extraction": false,
+  "source_files": {
+    "0_main.tex": {
+      "sha256": "45cf7d921ab965d39f40112215d4ff78c1575d8bfc23e2f9d248cceb628cc1e4"
+    },
+    "6_validation.tex": {
+      "sha256": "f82fee8b429372094aecd6084ad6fe325cd70df62a00f24221d046e508a5674d"
+    },
+    "Tables/Table1.tex": {
+      "sha256": "1c11733696200800a1118d1f3d96e101b261fcca0885bc8482ec8ed160503829"
+    },
+    "Tables/Table2.tex": {
+      "sha256": "077244e9f3f0305831bff572303ce34e43c3a24c7fc0c78b4d75e884d98fbf9d"
+    },
+    "Tables/Table3.tex": {
+      "sha256": "844df872142d8357af877c801bb5faf2f762f759257873ec6f0a8347e80f1904"
+    },
+    "Tables/Table4.tex": {
+      "sha256": "fe97bbc5a85d242f643081529fa95d9f449ee9c3655a02662a72da7ed6ed86d0"
+    },
+    "Tables/Table5.tex": {
+      "sha256": "58acc4c51b9e668706047681316f910aeabadc9516775aa689c2529c9a511fec"
+    }
+  },
+  "validation": {
+    "status": "passed",
+    "table2_rank_value_cells": 108,
+    "table3_percentage_cells": 32,
+    "table5_metric_cells": 96,
+    "table5_printed_gain_cells": 48,
+    "table4_seconds_cells": 6,
+    "csv_round_trip": "passed",
+    "source_numeric_sequence_checks": "passed",
+    "markdown_table_rows": "passed"
+  }
+}
