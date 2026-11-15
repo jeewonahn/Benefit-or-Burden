@@ -13,7 +13,7 @@ SCRIPTS = (
     "digat_run.py", "digat_prepare.py", "nnr_artifacts.py", "naml_cached_eval.py",
     "model_batch_defaults.py", "experiment_progress.py", "evaluation_progress.py",
     "training_validation.py", "prepare_development_candidates.py", "scheduled_cooling.py",
-    "candidate_policy.py", "consistent_candidate_profile.py",
+    "candidate_policy.py", "consistent_candidate_profile.py", "context_feature_policy.py",
 )
 
 
@@ -27,7 +27,7 @@ def freeze(root, run_dir):
     if run_dir.exists():
         raise ValueError("Run directory exists; preserve it and choose a new run")
     paths = [root / "scripts" / name for name in SCRIPTS]
-    paths += sorted(path for path in (root / "third_party/DIGAT").iterdir() if path.is_file())
+    paths += sorted(path for path in (root / "DIGAT").iterdir() if path.is_file())
     blobs = {path.relative_to(root).as_posix(): path.read_bytes() for path in paths}
     # Detect concurrent changes while reading the source set; never mix versions silently.
     for name, data in blobs.items():

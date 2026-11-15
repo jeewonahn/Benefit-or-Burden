@@ -190,7 +190,7 @@ def freeze_or_execute(args):
             raise ValueError('Use a new run directory; --resume is explicit')
         names = list(SCRIPTS) + ['run_converged_digat.py', 'convergence_control.py', 'evaluate_existing_digat.py']
         paths = [root / 'scripts' / name for name in names]
-        paths += sorted(path for path in (root / 'third_party/DIGAT').iterdir() if path.is_file())
+        paths += sorted(path for path in (root / 'DIGAT').iterdir() if path.is_file())
         blobs = {path.relative_to(root).as_posix(): path.read_bytes() for path in paths}
         if any((root / name).read_bytes() != data for name, data in blobs.items()):
             raise ValueError('Source changed while freezing')
@@ -395,7 +395,7 @@ def main():
     previous_cwd = Path.cwd()
     try:
         sys.dont_write_bytecode = True
-        sys.path.insert(0, str(ROOT / 'third_party/DIGAT'))
+        sys.path.insert(0, str(ROOT / 'DIGAT'))
         import numpy as np
         import torch
         from torch.utils.data import DataLoader

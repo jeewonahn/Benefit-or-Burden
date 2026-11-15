@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def exercise(case):
     sys.path.insert(0, str(ROOT / "scripts"))
-    sys.path.insert(0, str(ROOT / "third_party/DIGAT"))
+    sys.path.insert(0, str(ROOT / "DIGAT"))
     import numpy as np
     import tempfile
     from types import SimpleNamespace

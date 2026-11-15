@@ -63,6 +63,15 @@ def inside(root, relative):
     return target
 
 
+def frozen_model_directory(verified_files):
+    """Locate the DIGAT model in the original snapshot, including older layouts."""
+    model_files = [entry for name, entry in verified_files.items()
+                   if Path(name).parts[-2:] == ('DIGAT', 'model.py')]
+    if len(model_files) != 1:
+        raise ValueError('Expected exactly one DIGAT model.py in the verified snapshot')
+    return Path(model_files[0]['path']).parent
+
+
 def validate_candidate_manifest(candidate_manifest, behaviors, original):
     candidate = read_json(candidate_manifest)
     if candidate.get('status') != 'complete' or candidate.get('protocol') != 'total':
@@ -319,7 +328,7 @@ def run(args):
         # Import only the verified frozen computation; never mutate its .pyc files.
         sys.dont_write_bytecode = True
         snapshot = original_run / 'source_snapshot'
-        sys.path[:0] = [str(snapshot / 'scripts'), str(snapshot / 'third_party/DIGAT')]
+        sys.path[:0] = [str(snapshot / 'scripts'), str(frozen_model_directory(evidence['source_files']))]
         import numpy as np
         import torch
         import MIND_corpus

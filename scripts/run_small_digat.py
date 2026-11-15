@@ -12,7 +12,7 @@ import time
 import traceback
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "third_party" / "DIGAT"))
+sys.path.insert(0, str(ROOT / "DIGAT"))
 from digat_small_assets import config_for, identity
 from digat_run import verify_upstream
 from nnr_artifacts import check_inputs, fingerprint

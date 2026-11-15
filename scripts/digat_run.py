@@ -14,7 +14,7 @@ import sys
 from digat_prepare import sha256_file, validate_prepared
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-UPSTREAM = REPO_ROOT / "third_party" / "DIGAT"
+UPSTREAM = REPO_ROOT / "DIGAT"
 COMMIT = "0408369f20768b34c568f2db3937f276803a2868"
 SAG_MODEL = "sentence-transformers/all-mpnet-base-v2"
 # Explicitly documented upstream reference defaults, not recovered TORS settings.

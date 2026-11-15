@@ -45,7 +45,7 @@ class GraphTests(unittest.TestCase):
 class MetricTests(unittest.TestCase):
     def test_metrics_independently_match_official_scorer(self):
         from naml_cached_eval import metrics_from_ranks
-        spec = importlib.util.spec_from_file_location("digat_official_scorer", ROOT / "third_party/DIGAT/evaluate.py")
+        spec = importlib.util.spec_from_file_location("digat_official_scorer", ROOT / "DIGAT/evaluate.py")
         official = importlib.util.module_from_spec(spec); spec.loader.exec_module(official)
         rng = np.random.RandomState(42)
         for count in (2, 5, 10, 31, 91, 151):
@@ -76,7 +76,7 @@ class CUDACacheTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, (completed.stdout or "") + (completed.stderr or ""))
             return
         import torch
-        sys.path.insert(0, str(ROOT / "third_party" / "DIGAT"))
+        sys.path.insert(0, str(ROOT / "DIGAT"))
         from MIND_corpus import MIND_Corpus
         from model import Model
         from digat_cached_eval import DigatCachedEvaluator, news_categories

@@ -195,7 +195,7 @@ The terminal displays total/current-epoch training progress and current evaluati
 
 ~~~text
 NNR-main/                  NNR-derived model source and license
-third_party/DIGAT/         DIGAT source, provenance, and license
+DIGAT/                     DIGAT source, provenance, and license
 scripts/                  Preparation, training, evaluation, and tables
 tests/                    Software correctness tests
 RUN_MIND_PIPELINE.cmd      Download-to-results entry point

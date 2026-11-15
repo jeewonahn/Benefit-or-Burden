@@ -12,7 +12,7 @@ import traceback
 from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "third_party" / "DIGAT"))
+sys.path.insert(0, str(ROOT / "DIGAT"))
 from digat_run import DEFAULT_SETTINGS, verify_upstream
 from nnr_artifacts import fingerprint
 

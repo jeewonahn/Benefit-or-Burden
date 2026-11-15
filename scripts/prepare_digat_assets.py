@@ -122,7 +122,7 @@ def execute_backend(args, manifest, record):
     import torch
     import scheduled_cooling as cooling
 
-    sys.path.insert(0, str(ROOT / 'third_party' / 'DIGAT'))
+    sys.path.insert(0, str(ROOT / 'DIGAT'))
     import MIND_corpus
     import construct_SAG
 

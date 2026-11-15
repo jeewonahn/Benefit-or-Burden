@@ -94,10 +94,13 @@ class PipelineTests(unittest.TestCase):
             required=['prepare_mind_masters.py','prepare_consistent_candidates.py','prepare_model_assets.py','prepare_nnr_embedding_cache.py',
                 'context_embeddings.py','context_feature_policy.py','candidate_policy.py','consistent_candidate_profile.py','run_converged_nnr.py','summarize_converged_experiments.py']
             for name in required:(scripts/name).write_text('# synthetic source\n')
+            (repo / 'DIGAT').mkdir()
+            (repo / 'DIGAT/model.py').write_text('# upstream model')
             work=root/'work'
             with mock.patch.object(pipeline,'REPO',repo):
                 plan=pipeline.create_plan(pipeline.normalize(arguments(work)))
                 pipeline.verify_source(plan)
+                self.assertEqual((work / 'runtime/DIGAT/model.py').read_text(), '# upstream model')
                 original=(scripts/'candidate_policy.py').read_bytes()
                 target=work/'runtime/scripts/candidate_policy.py';target.write_text('# modified')
                 with self.assertRaisesRegex(ValueError,'Pinned file'):pipeline.verify_source(plan)

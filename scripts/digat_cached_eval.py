@@ -88,7 +88,7 @@ class DigatCachedEvaluator:
             "dtype": "float32", "device": str(self.device), "torch_version": torch.__version__,
             "matmul_allow_tf32": torch.backends.cuda.matmul.allow_tf32,
             "cudnn_allow_tf32": torch.backends.cudnn.allow_tf32, "pair_key": "(raw user id, last H news with tail padding, candidate news)",
-            "source_sha256": {name: _file_hash(ROOT / "third_party" / "DIGAT" / name)
+            "source_sha256": {name: _file_hash(ROOT / "DIGAT" / name)
                               for name in ("model.py", "newsEncoders.py", "graphEncoders.py", "layers.py")},
             "cache_implementation_sha256": _file_hash(__file__),
             "cache_utilities_sha256": _file_hash(ROOT / "scripts/naml_cached_eval.py"),

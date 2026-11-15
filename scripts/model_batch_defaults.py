@@ -14,7 +14,7 @@ MODEL_CONFIGS = {
     'LSTUR': 'NNR-main/config.py',
     'NPA': 'NNR-main/config.py',
     'CNE-SUE': 'NNR-main/config.py',
-    'DIGAT': 'third_party/DIGAT/config.py',
+    'DIGAT': 'DIGAT/config.py',
 }
 
 

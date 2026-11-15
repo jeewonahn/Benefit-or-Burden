@@ -274,7 +274,7 @@ def normalize(args,stored=None,*,sealed_plan=None):
 
 def source_inventory(root):
  result=[]
- for folder in ('scripts','NNR-main','third_party'):
+ for folder in ('scripts','NNR-main','DIGAT'):
   for path in sorted((root/folder).rglob('*'))if(root/folder).is_dir()else[]:
    if not path.is_file()or any(x in path.parts for x in ('__pycache__','.git','.venv')):continue
    if path.is_symlink()or path.suffix.lower()in('.pt','.pth','.pkl','.npy','.npz','.vec','.zip','.tsv')or path.stat().st_size>16*1024*1024:
