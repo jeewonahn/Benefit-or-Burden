@@ -19,6 +19,11 @@ OUTPUT_FILES={
  'test_total':'test/behaviors_total.tsv',
 }
 MASTER_FILES=('train/behaviors.tsv','dev/behaviors.tsv','test/behaviors.tsv')
+LARGE_PROXY_SCOPE = 'full_labeled_mind_large_train_dev'
+LARGE_MASTER_MAP = 'provenance/large_impression_minima.json'
+MASTER_MANIFEST_COPY = 'provenance/source_master_manifest.json'
+SAMPLED_USER_IDS = 'provenance/sample_users.json'
+MINIMUM_MAP = 'provenance/observed_first_impression_min.json'
 REQUIRED_VALIDATION=('same_base_policy_all_splits','master_IMP_preserved',
                      'GT_multiset_consistent_all_test_protocols','exclusions_recorded')
 
@@ -67,6 +72,26 @@ def _verify(root,expected,relative):
  return actual
 
 
+def verify_large_minimum_source(master, minimum, minimum_pin):
+    """Bind the complete proxy to the original labeled sources, independent of the sample."""
+    if master.get('dataset') != 'MIND-200K' or master.get('status') != 'complete':
+        raise ValueError('A complete MIND-200K source master is required')
+    def identity(pin, name):
+        checked = _expected(pin, name)
+        return checked['sha256'], checked['bytes']
+
+    if identity(master.get('full_source_minimum_map'), LARGE_MASTER_MAP) != identity(minimum_pin, MINIMUM_MAP):
+        raise ValueError('Full MIND-Large minimum map differs from its source master')
+    inputs = minimum.get('input_files', {})
+    roles = {'official_train', 'official_dev'}
+    if set(inputs) != roles:
+        raise ValueError('Full MIND-Large minimum map must cover both labeled archives')
+    for role in roles:
+        archived = master.get('source_archives', {}).get(role, {}).get('extracted_members', {})
+        if identity(inputs[role], role) != identity(archived.get('behaviors.tsv'), role):
+            raise ValueError('Full MIND-Large minimum map refers to different raw behaviors: ' + role)
+
+
 def validate_consistent_candidate_profile(data_root,*,verify_test_files=True):
  """Return the checked certificate identity and prescribed output bindings.
 
@@ -96,9 +121,26 @@ def validate_consistent_candidate_profile(data_root,*,verify_test_files=True):
   _path(root,relative)
   if verify_test_files or key in ('train_rs50','dev_rs50'):_verify(root,item,relative)
  _verify(root,cert.get('publication_proxy'),'news_publish_time.tsv')
- _verify(root,cert.get('source_minimum_map'),'provenance/observed_first_impression_min.json')
+ _verify(root,cert.get('source_minimum_map'),MINIMUM_MAP)
  _verify(root,cert.get('exclusions'),'exclusions.jsonl')
- expected_map=_read(root/'provenance/observed_first_impression_min.json').get('all_impressions_min')
+ minimum=_read(root/MINIMUM_MAP)
+ dataset_manifest=_read(root/'manifest.json') if (root/'manifest.json').is_file() else {}
+ if 'MIND-200K' in (dataset_manifest.get('dataset'), cert.get('dataset')) or (root/MASTER_MANIFEST_COPY).exists():
+  if not all(d.get('dataset')=='MIND-200K' and d.get('publication_scope')==LARGE_PROXY_SCOPE for d in (cert,dataset_manifest)):
+   raise ValueError('Inconsistent MIND-200K publication scope')
+  copied_master=_verify(root,cert.get('source_master_copy'),MASTER_MANIFEST_COPY)
+  original_pin=_expected(dataset_manifest.get('source_dataset_manifest'),MASTER_MANIFEST_COPY)
+  if any(copied_master[k]!=original_pin[k] for k in ('bytes','sha256')):
+   raise ValueError('MIND-200K candidate inputs differ from the source master')
+  master=_read(root/MASTER_MANIFEST_COPY)
+  verify_large_minimum_source(master,minimum,cert['source_minimum_map'])
+  sample=_verify(root,cert.get('user_ids'),SAMPLED_USER_IDS)
+  original_sample=_expected(master.get('user_sample',{}).get('user_ids'),SAMPLED_USER_IDS)
+  if any(sample[k]!=original_sample[k] for k in ('bytes','sha256')):
+   raise ValueError('MIND-200K candidate cohort differs from the sampled master')
+  if dataset_manifest.get('user_sample')!=dict(master['user_sample'],user_ids=cert['user_ids']):
+   raise ValueError('MIND-200K candidate dataset contains inconsistent sampling metadata')
+ expected_map=minimum.get('all_impressions_min')
  if not isinstance(expected_map,dict)or not expected_map:raise ValueError('Independent observed minimum map is empty or absent')
  expected={news:parse_timestamp(stamp)for news,stamp in expected_map.items()}
  proxy=PublicationIndex.from_proxy(root/'news_publish_time.tsv').publication
@@ -109,6 +151,9 @@ def validate_consistent_candidate_profile(data_root,*,verify_test_files=True):
   raise ValueError('Publication proxy is not a complete exact observed-minimum map')
  result=fingerprint(path)
  result.update(profile=PROFILE,seed=cert['seed'],outputs=outputs,coverage=coverage)
+ if cert.get('dataset')=='MIND-200K':
+  result.update(dataset='MIND-200K',publication_scope=LARGE_PROXY_SCOPE,
+                user_ids=cert['user_ids'],source_minimum_map=cert['source_minimum_map'])
  if not context['required']:result.update(declaration_fields(context))
  return result
 

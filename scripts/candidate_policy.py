@@ -5,6 +5,7 @@ or click times. Callers supply the union of positives in the current request
 (user, timestamp, normalized history); never aggregate later user clicks.
 """
 from bisect import bisect_left, bisect_right
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
 import random
@@ -59,6 +60,34 @@ def _ids(values, name):
     return result
 
 
+class _EligibleWindow(Sequence):
+    """A contiguous time window with sparse exclusions, in the original sampling order."""
+    def __init__(self, ids, left, right, excluded_positions):
+        self.ids, self.left, self.right = ids, left, right
+        self.excluded = sorted(pos for pos in excluded_positions if left <= pos < right)
+        # Exclusions at or before a compressed rank shift its index into the source tuple.
+        self.skip_ranks = tuple(pos-left-i for i,pos in enumerate(self.excluded))
+
+    def __len__(self):
+        return self.right-self.left-len(self.excluded)
+
+    def __getitem__(self, rank):
+        if isinstance(rank, slice):
+            return tuple(self[i] for i in range(*rank.indices(len(self))))
+        if rank < 0:
+            rank += len(self)
+        if not 0 <= rank < len(self):
+            raise IndexError(rank)
+        return self.ids[self.left + rank + bisect_right(self.skip_ranks, rank)]
+
+    def __iter__(self):
+        start = self.left
+        for pos in self.excluded:
+            yield from self.ids[start:pos]
+            start = pos+1
+        yield from self.ids[start:self.right]
+
+
 class PublicationIndex:
     """Index all known proxies; strict lifetime filtering is the same in every split."""
     def __init__(self, publication):
@@ -73,6 +102,7 @@ class PublicationIndex:
         self.publication = values
         self.ids = tuple(sorted(values, key=lambda n: (values[n], n)))
         self.times = tuple(values[n] for n in self.ids)
+        self.positions = {news: pos for pos, news in enumerate(self.ids)}
 
     @classmethod
     def from_proxy(cls, path):
@@ -86,6 +116,21 @@ class PublicationIndex:
                 values[parts[0]] = parse_timestamp(parts[1])
         return cls(values)
 
+    def window_bounds(self, current):
+        """Return the half-open index slice for the strict 24-hour availability window."""
+        current = parse_timestamp(current)
+        return (bisect_right(self.times, current - timedelta(hours=24)),
+                bisect_left(self.times, current))
+
+    def eligible_window(self, current, history, all_current_positives):
+        """Provide a random-access pool without materializing all eligible articles per request."""
+        positives = set(_ids(all_current_positives, 'current request positives'))
+        if not positives:
+            raise ValueError('A request must contain at least one positive')
+        excluded = set(_ids(history, 'request history')) | positives
+        left, right = self.window_bounds(current)
+        return _EligibleWindow(self.ids,left,right,(self.positions[n] for n in excluded if n in self.positions))
+
     def eligible(self, current, history, all_current_positives, known_news_ids=None):
         """Return t-24h < proxy < t, excluding history and every current-request GT.
 
@@ -93,14 +138,7 @@ class PublicationIndex:
         retain the IMP master and record its excluded request/positive counts.
         The positive's own lifetime is never tested here.
         """
-        current = parse_timestamp(current)
-        positives = set(_ids(all_current_positives, 'current request positives'))
-        if not positives:
-            raise ValueError('A request must contain at least one positive')
-        excluded = set(_ids(history, 'request history')) | positives
-        left = bisect_right(self.times, current - timedelta(hours=24))
-        right = bisect_left(self.times, current)
-        pool = tuple(n for n in self.ids[left:right] if n not in excluded)
+        pool = tuple(self.eligible_window(current, history, all_current_positives))
         if known_news_ids is not None:
             known = set(_ids(known_news_ids, 'news metadata'))
             if any(n not in known for n in pool):
@@ -110,9 +148,10 @@ class PublicationIndex:
 
 def sample_negative_prefixes(pool, counts=(30, 90, 150), *, seed=42, split='test', source_row=1, positive_index=0):
     """Draw one permutation prefix; requested k uses min(k,N) unique negatives."""
-    pool = _ids(pool, 'eligible negative pool')
-    if len(set(pool)) != len(pool):
-        raise ValueError('Eligible negative pool contains duplicate article IDs')
+    if not isinstance(pool, _EligibleWindow):
+        pool = _ids(pool, 'eligible negative pool')
+        if len(set(pool)) != len(pool):
+            raise ValueError('Eligible negative pool contains duplicate article IDs')
     counts = tuple(counts)
     if not counts or any(type(k) is not int or k < 1 for k in counts) or len(set(counts)) != len(counts):
         raise ValueError('Requested negative counts must be distinct positive integers')

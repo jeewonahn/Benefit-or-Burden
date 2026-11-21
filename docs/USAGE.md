@@ -34,7 +34,7 @@ Preparation downloads original ZIPs, registers GloVe 6B 300d and pinned MPNet fi
 | Development | November 14 | Official small train archive |
 | Final test | November 15 | Labeled official small dev archive |
 
-User/time/history request groups remain intact. Dates are checked against the archives. This five-day/one-day/one-day split differs from the manuscript's six training days. MIND-200K requires its own sampled-user data.
+User/time/history request groups remain intact. Dates are checked against the archives. This five-day/one-day/one-day split differs from the manuscript's six training days. To run MIND-200K, choose `--dataset MIND-200K` and a new work directory on the first command. The pipeline uses the labeled Large archives, selects 200,000 users, and saves the sample and seed. Subsequent commands for that directory reuse the recorded dataset.
 
 See [local archive inputs](FROM_RAW_MIND.md), [candidate construction](CONSISTENT_CANDIDATES.md), and [asset preparation](ASSET_PREPARATION.md).
 

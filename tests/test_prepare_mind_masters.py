@@ -126,7 +126,11 @@ class RawMasterTests(unittest.TestCase):
             root=Path(temporary);train,dev,graph,*_=fixture(root);graph.unlink()
             with self.assertRaises(FileNotFoundError):master.prepare(arguments(train,dev,graph,root/'out'))
     def test_small_is_not_200k_substitute(self):
-        with self.assertRaises(NotImplementedError):master.prepare(SimpleNamespace(dataset='MIND-200K'))
+        with tempfile.TemporaryDirectory()as temporary:
+            root=Path(temporary);train,dev,graph,*_=fixture(root)
+            with self.assertRaisesRegex(ValueError,'200,000 unique users'):
+                master.prepare(arguments(train,dev,graph,root/'out',dataset='MIND-200K'))
+            self.assertFalse((root/'out').exists())
     def test_zip_path_traversal_absolute_ads_and_reserved_names_are_rejected(self):
         for name in('../escape.txt','/absolute.txt','C:/drive.txt','file:stream','CON','a/../news.tsv'):
             with self.subTest(name=name),tempfile.TemporaryDirectory()as temporary:

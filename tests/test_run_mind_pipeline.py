@@ -36,6 +36,94 @@ def zip_bytes():
 
 
 class PipelineTests(unittest.TestCase):
+    def test_dataset_selection_reaches_archives_raw_phase_and_tables(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work=Path(temporary)/'work'
+            options=pipeline.normalize(arguments(work,'--dataset','mind-200k','--seed','27'))
+            self.assertEqual(options['dataset'],'MIND-200K')
+            self.assertEqual(Path(options['train_zip']),work/'downloads/MINDlarge_train.zip')
+            self.assertEqual(Path(options['dev_zip']),work/'downloads/MINDlarge_dev.zip')
+            plan={'options':options,'runtime':str(work/'runtime')}
+            raw=pipeline.phase_commands(plan)['raw']
+            self.assertEqual(raw[raw.index('--dataset')+1],'MIND-200K')
+            self.assertEqual(pipeline.table_summary_plan(plan,[])['dataset'],'MIND-200K')
+            self.assertEqual(pipeline.normalize(arguments(work),options),options)
+            with self.assertRaisesRegex(ValueError,'dataset'):
+                pipeline.normalize(arguments(work,'--dataset','MIND-small'),options)
+            custom_zip=Path(temporary)/'licensed_large_train.zip'
+            local=pipeline.normalize(arguments(work,'--dataset','MIND-200K','--train-zip',str(custom_zip)))
+            self.assertEqual(Path(local['train_zip']),custom_zip)
+
+    def test_legacy_plan_is_implicitly_small_and_cannot_be_resumed_as_200k(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work=Path(temporary)/'work'
+            stored=pipeline.normalize(arguments(work))
+            del stored['dataset']
+            legacy_plan={'options':dict(stored,seed=42),'runtime':str(work/'runtime')}
+            self.assertNotIn('--dataset',pipeline.phase_commands(legacy_plan)['raw'])
+            self.assertNotIn('dataset',pipeline.table_summary_plan(legacy_plan,[]))
+            for extra in ([],['--dataset','MIND-SMALL']):
+                resolved=pipeline.normalize(arguments(work,*extra),stored)
+                self.assertEqual(resolved.pop('dataset'),'MIND-small')
+                self.assertEqual(resolved,stored)
+            with self.assertRaisesRegex(ValueError,'dataset'):
+                pipeline.normalize(arguments(work,'--dataset','MIND-200K'),stored)
+
+    def test_large_downloads_request_only_official_labeled_train_and_dev(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work=Path(temporary)/'work'
+            options=pipeline.normalize(arguments(work,'--dataset','MIND-200K','--download','--accept-mind-license'))
+            plan={'options':options,'runtime':str(work/'runtime')}
+            pipeline.save(work/'control/pipeline_plan.json',plan)
+            controller=pipeline.Pipeline(plan)
+            requested=[]
+            original=pipeline.download_official
+            def capture(url,destination,expected_sha256=None):
+                requested.append(url)
+                return original(url,destination,expected_sha256=expected_sha256,
+                                opener=lambda *args,**kwargs:Response(zip_bytes()))
+            with mock.patch.object(pipeline,'download_official',side_effect=capture):
+                controller.inputs()
+            self.assertEqual(requested,[pipeline.MIND_MIRROR+name for name in ('MINDlarge_train.zip','MINDlarge_dev.zip')])
+            self.assertEqual(set(controller.state['raw_inputs']),{'train_zip','dev_zip'})
+
+    def test_large_results_and_cohort_receipt_match_selected_users(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work=Path(temporary)/'work'
+            options=pipeline.normalize(arguments(work,'--dataset','MIND-200K','--seed','41'))
+            user_ids=work/'masters/provenance/sample_users.json'
+            pipeline.save(user_ids,['U'+str(i) for i in range(200000)])
+            pin=pipeline.fp(user_ids)
+            sample={'count':200000,'population_count':310000,'seed':41,'user_ids':pin}
+            raw={'dataset':'MIND-200K','user_sample':sample,'output_files':{'provenance/sample_users.json':pin}}
+            self.assertEqual(pipeline.verified_user_sample(options,raw),sample)
+            raw_pin={'sha256':'a'*64,'bytes':1000}
+            candidate_pin=dict(pin,path='provenance/sample_users.json')
+            candidates={'dataset':'MIND-200K','seed':41,'source_dataset_manifest':raw_pin,
+                        'user_sample':dict(sample,user_ids=candidate_pin)}
+            pipeline.verify_candidate_dataset(options,candidates,sample,raw_pin)
+            with self.assertRaisesRegex(ValueError,'different raw master'):
+                pipeline.verify_candidate_dataset(options,candidates,sample,dict(raw_pin,sha256='b'*64))
+            with self.assertRaisesRegex(ValueError,'different MIND-200K cohort'):
+                pipeline.verify_candidate_dataset(options,candidates,dict(sample,user_ids=dict(pin,sha256='c'*64)),raw_pin)
+            plan={'options':options}
+            pipeline.save(work/'control/pipeline_plan.json',plan)
+            m=work/'experiment.json';net={'training':0,'dev_evaluation':0,'total':0,'cooling_rest':0,
+                                          'tests':dict.fromkeys(pipeline.PROTOCOLS,0)}
+            job={'model':'NAML','name':'NAML_imp','train_type':'imp','seed':41,'manifest':str(m)}
+            pipeline.save(m,dict(job,effective_config={'seed':41},best_epoch=1,epochs_completed=5,
+                                 evaluations={p:{'metrics':{}} for p in pipeline.PROTOCOLS}))
+            proof={'NAML_imp':{'timings_seconds_net':net}}
+            pipeline.write_selected_results(work/'results',[job],proof,plan,user_sample=sample)
+            result=pipeline.read(work/'results/config.json')
+            self.assertEqual(result['dataset'],'MIND-200K')
+            self.assertEqual(result['user_sample']['user_ids']['sha256'],pin['sha256'])
+            with self.assertRaisesRegex(ValueError,'dataset'):
+                pipeline.verified_user_sample(options,dict(raw,dataset='MIND-small'))
+            user_ids.write_text('[]')
+            with self.assertRaisesRegex(ValueError,'Pinned file'):
+                pipeline.verified_user_sample(options,raw)
+
     def test_declared_seed_is_shared_by_two_fresh_naml_conditions(self):
         with tempfile.TemporaryDirectory()as temporary:
             plan=plan_for(Path(temporary)/'work');jobs=pipeline.job_commands(plan)

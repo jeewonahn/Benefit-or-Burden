@@ -33,11 +33,24 @@ MIND_PAGE='https://msnews.github.io/'
 MIND_DOWNLOAD_CATALOG='https://github.com/recommenders-team/recommenders/blob/main/recommenders/datasets/mind.py'
 MIND_LICENSE='https://github.com/msnews/MIND/blob/master/MSR%20License_Data.pdf'
 SEMANTIC_REVISION='e8c3b32edf5434bc2275fc9bab85f82640a19130'
-DOWNLOADS={
- 'train':('MINDsmall_train.zip','https://huggingface.co/datasets/Recommenders/MIND/resolve/main/MINDsmall_train.zip'),
- 'dev':('MINDsmall_dev.zip','https://huggingface.co/datasets/Recommenders/MIND/resolve/main/MINDsmall_dev.zip'),
- 'graph':('wikidata-graph.zip','https://mind201910.blob.core.windows.net/knowledge-graph/wikidata-graph.zip'),
-}
+SMALL='MIND-small'
+SAMPLED_LARGE='MIND-200K'
+DATASET_NAMES=(SMALL,SAMPLED_LARGE)
+MIND_MIRROR='https://huggingface.co/datasets/Recommenders/MIND/resolve/main/'
+DATASET_DOWNLOADS={}
+for dataset_name,archive_prefix in ((SMALL,'MINDsmall'),(SAMPLED_LARGE,'MINDlarge')):
+ archives={'graph':('wikidata-graph.zip','https://mind201910.blob.core.windows.net/knowledge-graph/wikidata-graph.zip')}
+ for split in ('train','dev'):
+  filename=f'{archive_prefix}_{split}.zip'
+  archives[split]=(filename,MIND_MIRROR+filename)
+ DATASET_DOWNLOADS[dataset_name]=archives
+DOWNLOADS=DATASET_DOWNLOADS[SMALL]  # Original MIND-small catalogue for existing callers.
+
+
+def parse_dataset(value):
+ for name in DATASET_NAMES:
+  if value.casefold()==name.casefold():return name
+ raise argparse.ArgumentTypeError('Choose MIND-small or MIND-200K')
 
 
 def utc():return datetime.now(timezone.utc).isoformat()
@@ -107,7 +120,7 @@ def download_official(url,destination,*,expected_sha256=None,opener=None):
  Availability and access are external: a local licensed archive is the supported
  fallback. An observed SHA alone is not an authoritative expected checksum.
  """
- if not any(url==value[1]for value in DOWNLOADS.values()):raise ValueError('Only declared dataset/graph source URLs are supported')
+ if not any(url==item[1]for catalog in DATASET_DOWNLOADS.values()for item in catalog.values()):raise ValueError('Only declared dataset/graph source URLs are supported')
  if expected_sha256 is not None and (len(expected_sha256)!=64 or any(c not in '0123456789abcdef'for c in expected_sha256)):
   raise ValueError('Expected SHA-256 must be 64 lowercase hexadecimal characters')
  destination=Path(destination).resolve()
@@ -236,7 +249,7 @@ def normalize(args,stored=None,*,sealed_plan=None):
  work=args.work_dir.resolve()
  if work==REPO or REPO in work.parents:raise ValueError('Keep work/data/results outside the source repository')
  if work in REPO.parents:verify_frozen_work_location(work,stored,sealed_plan)
- defaults={'models':['NAML'],'seed':'random','dev_fraction':.05,'download':False,'accept_mind_license':False,
+ defaults={'dataset':SMALL,'models':['NAML'],'seed':'random','dev_fraction':.05,'download':False,'accept_mind_license':False,
   'split_policy':'chronological','context_feature_mode':('required' if args.wikidata_graph is not None else 'context_not_used_by_paper_models'),'semantic_revision':SEMANTIC_REVISION,'download_nltk':False,'npa_features_on_gpu':False,'personalized_batch_size':512}
  names=list(defaults)+['train_zip','dev_zip','wikidata_graph','embedding_root','glove_archive','glove_text','sag_model','sag_model_source',
  'digat_assets','nnr_cache_dir','mind_train_sha256','mind_dev_sha256','wikidata_sha256']
@@ -246,15 +259,16 @@ def normalize(args,stored=None,*,sealed_plan=None):
   if name=='seed'and given is not None:given=parse_seed(given)
   if stored is not None:
    if name=='seed'and given=='random':given=None
-   previous=stored.get(name)
+   previous=stored.get(name,SMALL)if name=='dataset'else stored.get(name)
    value=previous if given is None else given
    comparable=str(given.resolve())if isinstance(given,Path)else resolve_models(given)if name=='models'and given is not None else given
    if given is not None and comparable!=previous:raise ValueError('Resume cannot change declared option: '+name)
   else:value=defaults.get(name)if given is None else given
   options[name]=str(value.resolve())if isinstance(value,Path)else value
  options['models']=resolve_models(options['models'])
- for name,default in [('train_zip',work/'downloads'/DOWNLOADS['train'][0]),('dev_zip',work/'downloads'/DOWNLOADS['dev'][0]),
-  ('wikidata_graph',work/'downloads'/DOWNLOADS['graph'][0]),('embedding_root',work/'assets/glove6b'),
+ catalog=DATASET_DOWNLOADS[options['dataset']]
+ for name,default in [('train_zip',work/'downloads'/catalog['train'][0]),('dev_zip',work/'downloads'/catalog['dev'][0]),
+  ('wikidata_graph',work/'downloads'/catalog['graph'][0]),('embedding_root',work/'assets/glove6b'),
   ('nnr_cache_dir',work/'assets/nnr_cache'),('sag_model',work/'assets/all-mpnet-base-v2'),('digat_assets',work/'assets/digat')]:
   if options[name]is None:options[name]=str(default)
  if options['download']and not options['accept_mind_license']:
@@ -350,12 +364,50 @@ def phase_commands(plan,raw_inputs=None):
  raw=py+[str(scripts/'prepare_mind_masters.py'),'--train-zip',o['train_zip'],'--dev-zip',o['dev_zip'],
   '--output',str(work/'masters'),'--seed',str(o['seed']),'--dev-fraction',str(o['dev_fraction']),
   '--split-policy',o['split_policy'],'--context-feature-mode',o['context_feature_mode'],'--selected-models',*o['models']]
+ if 'dataset' in o:raw+=['--dataset',o['dataset']]
  if o['context_feature_mode']=='required':raw+=['--wikidata-graph',o['wikidata_graph']]
  result={'raw':raw,'candidates':py+[str(scripts/'prepare_consistent_candidates.py'),'--source-data-root',str(work/'masters'),
   '--output',str(work/'dataset'),'--seed',str(o['seed'])]}
  if raw_inputs:
   result['raw'] += ['--expected-train-sha256',raw_inputs['train_zip']['sha256'],'--expected-dev-sha256',raw_inputs['dev_zip']['sha256']]
  return result
+
+
+def verified_user_sample(options,raw):
+ """Bind a 200K study to the sampled user IDs committed by raw preparation."""
+ dataset=options.get('dataset',SMALL)
+ if raw.get('dataset')!=dataset:raise ValueError('Raw master dataset differs from the frozen plan')
+ if dataset==SMALL:return None
+ sample=raw['user_sample'];relative='provenance/sample_users.json'
+ pin=sample['user_ids']
+ if sample['count']!=200000 or sample['population_count']<sample['count'] or sample['seed']!=options['seed']:
+  raise ValueError('Raw master cohort differs from the MIND-200K study configuration')
+ expected=(Path(options['work_dir'])/'masters'/relative).resolve()
+ output_pin=raw['output_files'].get(relative,{})
+ if Path(pin['path']).resolve()!=expected or any(output_pin.get(key)!=pin[key]for key in ('path','bytes','sha256')):
+  raise ValueError('Sampled user list differs from the committed master output')
+ verify(pin)
+ ids=read(expected)
+ if not isinstance(ids,list) or len(ids)!=sample['count'] or not all(isinstance(uid,str)and uid for uid in ids) or len(set(ids))!=len(ids):
+  raise ValueError('Sampled user list must contain exactly 200,000 distinct user IDs')
+ return sample
+
+
+def verify_candidate_dataset(options,manifest,user_sample,raw_master=None):
+ """Ensure candidate files belong to this study's dataset and raw master."""
+ dataset=options.get('dataset',SMALL)
+ if manifest.get('dataset',SMALL)!=dataset:raise ValueError('Candidate dataset differs from the frozen study')
+ if dataset==SMALL:return
+ if not user_sample or not raw_master:raise ValueError('Missing sealed MIND-200K cohort or raw source')
+ source=manifest.get('source_dataset_manifest',{})
+ if any(source.get(k)!=raw_master[k]for k in ('bytes','sha256')):
+  raise ValueError('Candidate dataset came from a different raw master')
+ candidate_sample=manifest.get('user_sample',{})
+ candidate_ids=candidate_sample.get('user_ids',{})
+ if (manifest.get('seed')!=options['seed']
+     or any(candidate_sample.get(k)!=user_sample[k]for k in ('count','population_count','seed'))
+     or any(candidate_ids.get(k)!=user_sample['user_ids'][k]for k in ('bytes','sha256'))):
+  raise ValueError('Candidate dataset uses a different MIND-200K cohort or seed')
 
 
 def complete_job(job,experiment_plan):
@@ -389,7 +441,7 @@ def complete_job(job,experiment_plan):
   'best_epoch':m['best_epoch'],'epochs_completed':m['epochs_completed'],'timings_seconds_net':m['timings_seconds_net']}
 
 
-def write_selected_results(output,jobs,proofs,plan=None):
+def write_selected_results(output,jobs,proofs,plan=None,*,user_sample=None):
  """Export native metrics and audited measured-net time; no fabricated Table 3."""
  output=Path(output);output.mkdir(parents=True,exist_ok=True);metrics=[];timings=[];configurations=[]
  for job in jobs:
@@ -419,12 +471,16 @@ def write_selected_results(output,jobs,proofs,plan=None):
  if plan is not None and seeds!=[plan['options']['seed']]:raise ValueError('Result seeds differ from the sealed pipeline configuration')
  planpath=Path(plan['options']['work_dir'])/'control/pipeline_plan.json'if plan is not None else None
  if planpath is not None and not planpath.is_file():raise ValueError('Sealed pipeline plan is absent for result configuration')
+ dataset=plan['options'].get('dataset',SMALL)if plan is not None else None
+ if dataset==SAMPLED_LARGE and user_sample is None:raise ValueError('200K results require the selected user cohort from the sealed experiment')
  result_config={'schema':1,'training_seeds':seeds,'candidate_seed':plan['options']['seed']if plan is not None else None,
   'seed_selection':plan.get('seed_selection')if plan is not None else None,
   'analysis_seeds':plan.get('analysis_seeds')if plan is not None else None,
   'resolved_options':plan['options']if plan is not None else None,
   'training_settings':plan.get('training_settings')if plan is not None else None,'cooling':plan.get('cooling')if plan is not None else None,
   'pipeline_plan':fp(planpath)if planpath is not None else None,'runs':configurations}
+ if plan is not None and 'dataset' in plan['options']:
+  result_config.update(dataset=dataset,user_sample=user_sample)
  configpath=output/'config.json'
  if configpath.is_file():
   if read(configpath)!=result_config:raise ValueError('Preserve existing results: resolved configuration changed')
@@ -454,10 +510,12 @@ def table_summary_plan(plan,jobs):
  seed=o['seed']
  if type(seed)is not int or not 0<=seed<SEED_LIMIT:raise ValueError('Seal the study seed before constructing table jobs')
  analysis=plan.get('analysis_seeds',{'table3_request_resampling':{'seed':42,'derivation':'legacy fixed analysis seed'}})
- return {'schema':1,'seeds':[seed],'candidate_seed':seed,'analysis_seeds':analysis,
+ result={'schema':1,'seeds':[seed],'candidate_seed':seed,'analysis_seeds':analysis,
   'data_root':str(work/'dataset'),'candidate_manifest':str(work/'dataset/provenance/full_total_manifest.json'),
   'jobs':[dict(model=j['model'],train_type=j['train_type'],seed=j['seed'],success_file=j['manifest'])for j in jobs],
   'result_configuration':fp(work/'results/config.json')if(work/'results/config.json').is_file()else None}
+ if 'dataset' in o:result['dataset']=o['dataset']
+ return result
 
 
 class Pipeline:
@@ -498,15 +556,16 @@ class Pipeline:
   self.state['phases'][name]={'manifest':fp(manifest)};self.record()
  def inputs(self):
   o=self.options
+  catalog=DATASET_DOWNLOADS[o.get('dataset',SMALL)]
   declared=[('train_zip','train','mind_train_sha256'),('dev_zip','dev','mind_dev_sha256')]
   if o['context_feature_mode']=='required':declared.append(('wikidata_graph','graph','wikidata_sha256'))
   for name,key,expected in declared:
    path=Path(o[name])
    if not path.is_file():
     if not o['download']:raise FileNotFoundError('Supply local archives or explicitly --download --accept-mind-license: '+str(path))
-    default=self.work/'downloads'/DOWNLOADS[key][0]
+    default=self.work/'downloads'/catalog[key][0]
     if path!=default:raise ValueError('Downloads never write a user-supplied input location; omit its archive flag to use work/downloads')
-    download_official(DOWNLOADS[key][1],path,expected_sha256=o[expected])
+    download_official(catalog[key][1],path,expected_sha256=o[expected])
    actual=fp(path)
    if o[expected]is not None and actual['sha256']!=o[expected]:raise ValueError('Local input checksum differs: '+name)
    previous=self.state.setdefault('raw_inputs',{}).get(name)
@@ -534,18 +593,23 @@ class Pipeline:
    self.command(cmd,'semantic_model_assets')
   if o['download_nltk']:
    self.command(py+['-m','nltk.downloader','punkt','punkt_tab'],'explicit_nltk_resources')
- def seal_experiments(self):
+ def seal_experiments(self,user_sample=None):
   path=self.control/'experiment_plan.json'
+  dataset=self.options.get('dataset',SMALL)
+  data=self.work/'dataset';manifest=read(data/'manifest.json')
+  raw_pin=self.state['phases'].get('raw_masters',{}).get('manifest')
+  verify_candidate_dataset(self.options,manifest,user_sample,raw_pin)
   if path.is_file():
    plan=read(path)
+   if plan.get('dataset',SMALL)!=dataset or plan.get('user_sample')!=user_sample:raise ValueError('Experiment plan belongs to another dataset or user sample')
    if plan.get('pipeline_plan_sha256')!=sha(self.control/'pipeline_plan.json'):raise ValueError('Experiment plan belongs to another pipeline')
    if plan['jobs']!=job_commands(self.plan):raise ValueError('Experiment commands differ from the frozen plan')
    for pin in plan['input_files']:verify(pin)
    return plan
   sys.path.insert(0,str(Path(self.plan['runtime'])/'scripts'))
   from consistent_candidate_profile import validate_consistent_candidate_profile,evaluation_paths
-  data=self.work/'dataset';profile=validate_consistent_candidate_profile(data);manifest=read(data/'manifest.json');paths=evaluation_paths(data,profile)
-  plan={'schema':1,'pipeline_plan_sha256':sha(self.control/'pipeline_plan.json'),'candidate_profile':profile,
+  profile=validate_consistent_candidate_profile(data);paths=evaluation_paths(data,profile)
+  plan={'schema':1,'dataset':dataset,'user_sample':user_sample,'pipeline_plan_sha256':sha(self.control/'pipeline_plan.json'),'candidate_profile':profile,
    'derived_asset_policy':'lazy_DIGAT_separate_immutable_seal_v1',
    'jobs':job_commands(self.plan),'dev_inputs':{t:fp(data/'dev'/('behaviors.tsv'if t=='imp'else'behaviors_rs50.tsv'))for t in('imp','rs50')},
    'test_inputs':{p:{'file':fp(paths[p]),'statistics':manifest['statistics'][str(paths[p].relative_to(data)).replace('\\','/')]}for p in PROTOCOLS},
@@ -631,6 +695,7 @@ class Pipeline:
    for pin in self.state['raw_inputs'].values():verify(pin)
    phases=phase_commands(self.plan,self.state['raw_inputs']);self.phase('raw_masters',phases['raw'],self.work/'masters/manifest.json')
    raw=read(self.work/'masters/manifest.json')
+   user_sample=verified_user_sample(self.options,raw)
    raw_bindings=[('train_zip',raw['source_archives']['official_train']),('dev_zip',raw['source_archives']['official_dev'])]
    if self.options['context_feature_mode']=='required':raw_bindings.append(('wikidata_graph',raw['context']['source_graph']))
    if raw.get('context_feature_mode','required')!=self.options['context_feature_mode']:raise ValueError('Raw master context mode differs from the frozen plan')
@@ -641,6 +706,7 @@ class Pipeline:
    for entry in raw['assets'].values():verify(entry['output'])
    self.phase('consistent_candidates',phases['candidates'],self.work/'dataset/manifest.json')
    if prepare_only:
+    verify_candidate_dataset(self.options,read(self.work/'dataset/manifest.json'),user_sample,self.state['phases']['raw_masters']['manifest'])
     self.state['status']='prepared';self.state['GPU_test_performed']=False;self.record();return
    environment=environment_report(self.options['models'])
    missing=[n for n,available in environment['module_available'].items()if not available]
@@ -649,10 +715,10 @@ class Pipeline:
    if any(m in NNR_MODELS for m in self.options['models']):
     self.command([sys.executable,'-B','-u',str(Path(self.plan['runtime'])/'scripts/prepare_nnr_embedding_cache.py'),
      '--source',str(Path(self.options['embedding_root'])/'glove.6B.300d.txt'),'--output',self.options['nnr_cache_dir']],'private_nnr_cache')
-   experiments=self.seal_experiments();self.state['status']='running';self.record()
+   experiments=self.seal_experiments(user_sample);self.state['status']='running';self.record()
    self.run_jobs(experiments)
    result_proofs={name:value['proof']for name,value in self.state['jobs'].items()}
-   self.state['results']=write_selected_results(self.work/'results',experiments['jobs'],result_proofs,plan=self.plan)
+   self.state['results']=write_selected_results(self.work/'results',experiments['jobs'],result_proofs,plan=self.plan,user_sample=experiments.get('user_sample'))
    if self.options['models']==list(MODELS):
     summary_plan=table_summary_plan(self.plan,experiments['jobs'])
     summary_path=self.control/'table_plan.json'
@@ -683,6 +749,7 @@ class Pipeline:
 def parser():
  p=argparse.ArgumentParser(description=__doc__)
  p.add_argument('--work-dir',type=Path,required=True)
+ p.add_argument('--dataset',type=parse_dataset,choices=DATASET_NAMES,help='MIND-small (default) or MIND-200K sampled from the labeled MIND-Large train and dev archives; resume uses the sealed dataset')
  mode=p.add_mutually_exclusive_group(required=True)
  for name in ('execute','prepare-only','dry-run','check-only','status'):mode.add_argument('--'+name,action='store_true')
  p.add_argument('--resume',action='store_true');p.add_argument('--models',nargs='+')
@@ -723,6 +790,11 @@ def main():
     for group in ('raw_inputs','asset_inputs'):
      for pin in state.get(group,{}).values():verify(pin)
     result['recorded_input_pins_verified']=True
+    if options['dataset']==SAMPLED_LARGE and 'raw_masters'in state.get('phases',{}):
+     pin=state['phases']['raw_masters']['manifest'];verify(pin)
+     result['verified_user_sample']=verified_user_sample(options,read(pin['path']))
+     if result['prepared_dataset_present']:
+      verify_candidate_dataset(options,read(data/'manifest.json'),result['verified_user_sample'],pin)
    result['native_model_check']='Not executed by this read-only preflight; no CUDA/model import' 
   print(json.dumps(result,indent=2));return
  if old and not args.resume:raise ValueError('Existing work requires --resume; completed work is never automatically repeated')

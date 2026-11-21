@@ -68,6 +68,10 @@ class MatchedNNRDevelopment(unittest.TestCase):
             self.assertEqual(argv[argv.index("--train_type")+1],"rs50")
             self.assertEqual(argv[argv.index("--test_type")+1],"imp")
             self.assertEqual(argv[argv.index("--batch_size")+1],"64")
+            self.assertEqual(argv[argv.index("--dataset")+1],"small")
+            args.matched_candidate_profile = {"dataset": "MIND-200K"}
+            argv = nnr_runtime_arguments(args, {"value": 64})
+            self.assertEqual(argv[argv.index("--dataset")+1],"200k")
 
     def test_changed_dev_objective_rejects_old_rands_checkpoint(self):
         control=EarlyStopping(); control.update(1,0.4)

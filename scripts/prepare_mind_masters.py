@@ -1,4 +1,4 @@
-"""Build labeled MIND-small IMP masters from official train/dev ZIP inputs.
+"""Build labeled MIND-Small or MIND-200K IMP masters from train/dev ZIP inputs.
 
 Official train is divided by complete request groups. Official dev is the final
 labeled test source. Raw row bytes and archives remain unchanged. This command
@@ -33,6 +33,9 @@ TIME_FORMAT='%m/%d/%Y %I:%M:%S %p'
 DEFAULT_MAX_MEMBER_BYTES=512*1024*1024
 DEFAULT_MAX_TOTAL_BYTES=1024*1024*1024
 DEFAULT_MAX_RATIO=1000.0
+LARGE_MAX_MEMBER_BYTES=4*1024**3
+LARGE_MAX_TOTAL_BYTES=8*1024**3
+MIND_200K_USERS=200_000
 
 
 def fingerprint(path):
@@ -75,7 +78,7 @@ def inspect_archive(path,*,max_member_bytes,max_total_bytes,max_compression_rati
     selected={};inventory=[];seen=set();total=0
     with zipfile.ZipFile(path)as archive:
         infos=archive.infolist()
-        if len(infos)>4096:raise ValueError('Too many ZIP members for a small-data archive')
+        if len(infos)>4096:raise ValueError('Too many ZIP members in the dataset archive')
         for info in infos:
             name=_safe_member(info);folded=name.casefold()
             if folded in seen:raise ValueError('Duplicate/case-colliding ZIP member')
@@ -115,36 +118,71 @@ def extract_selected(path,inspection,destination):
 def group_digest(key):return hashlib.sha256('\t'.join(key).encode('utf-8')).hexdigest()
 
 
-def read_behaviors(path,source_role):
+def sample_large_users(raw, seed, staging):
+    """Draw from unique users of both labeled archives, independent of row order and labels."""
+    population = set()
+    for role, members in raw.items():
+        with Path(members['behaviors.tsv']['path']).open('rb') as stream:
+            for number, row in enumerate(stream, 1):
+                fields = row.split(b'\t', 2)
+                if len(fields) != 3 or not fields[1]:
+                    raise ValueError(f'{role} behaviors row {number}: missing user ID')
+                population.add(fields[1].decode('utf-8'))
+    if len(population) < MIND_200K_USERS:
+        raise ValueError(f'MIND-200K requires at least {MIND_200K_USERS:,} unique users across MIND-Large train/dev; found {len(population):,}')
+    stream_seed = f'{seed}:MIND-200K:user-cohort:v1'
+    users = sorted(random.Random(stream_seed).sample(sorted(population), MIND_200K_USERS))
+    output = staging / 'provenance/sample_users.json'
+    write_json(output, users)
+    return set(users), dict(count=len(users), population_count=len(population), seed=seed,
+                            population='Unique user IDs in the union of labeled MIND-Large train and dev',
+                            sampling='Uniform without replacement from lexicographically sorted IDs',
+                            random_stream=stream_seed, user_ids=fingerprint(output))
+
+
+def read_behaviors(path,source_role,known,*,selected_users=None,publication=None):
+    """Validate every input row, retaining only cohort requests for the splits."""
     records=[];groups=defaultdict(list);dates=Counter();digest=hashlib.sha256();start=end=None
+    full_dates=Counter();full_digest=hashlib.sha256();selected_bytes=0
     with Path(path).open('rb')as stream:
         for source_row,raw in enumerate(stream,1):
-            digest.update(raw)
+            full_digest.update(raw)
             try:
                 parts=raw.decode('utf-8-sig'if source_row==1 else'utf-8').rstrip('\r\n').split('\t')
                 if len(parts)!=5 or not all(parts[i]for i in(0,1,2)):raise ValueError('five fields and request identifiers are required')
                 current=datetime.strptime(parts[2],TIME_FORMAT)
-                seen=set();positive=[];candidate_ids=[];negative=0
+                seen=set();positive=[];negative=0
                 for token in parts[4].split():
                     news,label=token.rsplit('-',1)
                     if not news or label not in ('0','1')or news in seen:raise ValueError('labeled unique candidates are required')
-                    seen.add(news);candidate_ids.append(news)
+                    seen.add(news)
+                    if publication is not None and (news not in publication or current<publication[news]):
+                        publication[news]=current
                     if label=='1':positive.append(news)
                     else:negative+=1
                 if not positive or not negative:raise ValueError('both positive and negative labels are required')
+                history=parts[3].split()
+                if not seen.issubset(known) or any(news not in known for news in history):
+                    raise ValueError('A behavior/history article is absent from the complete metadata union')
             except(UnicodeDecodeError,ValueError)as error:
                 raise ValueError(f'{source_role} behaviors row {source_row}: {error}')from error
-            key=(parts[1],parts[2],' '.join(parts[3].split()))
-            record=dict(source_row=source_row,raw=raw,key=key,positive=tuple(positive),candidates=tuple(candidate_ids),
-                history=tuple(parts[3].split()),time=current,source_role=source_role)
-            records.append(record);groups[key].append(record);dates[current.date().isoformat()]+=1
+            date=current.date().isoformat()
+            full_dates[date]+=1
+            if selected_users is not None and parts[1] not in selected_users:
+                continue
+            digest.update(raw);selected_bytes+=len(raw)
+            key=(parts[1],parts[2],' '.join(history))
+            record=dict(source_row=source_row,raw=raw,key=key,positive=tuple(positive),candidate_count=len(seen),
+                time=current,source_role=source_role)
+            records.append(record);groups[key].append(record);dates[date]+=1
             start=current if start is None else min(start,current);end=current if end is None else max(end,current)
-    if not records:raise ValueError(source_role+' behavior source is empty')
+    if not records:raise ValueError(source_role+' has no selected behavior rows')
     stats=dict(rows=len(records),groups=len(groups),duplicate_group_rows=len(records)-len(groups),
-        candidates=sum(len(r['candidates'])for r in records),positive_labels=sum(len(r['positive'])for r in records),
+        candidates=sum(r['candidate_count'] for r in records),positive_labels=sum(len(r['positive'])for r in records),
         dates=dict(sorted(dates.items())),timestamp_min=start.isoformat(),timestamp_max=end.isoformat(),
-        timezone='unspecified_naive_MIND_timestamp',sha256=digest.hexdigest())
-    return records,groups,stats
+        timezone='unspecified_naive_MIND_timestamp',sha256=digest.hexdigest(),bytes=selected_bytes)
+    full_stats=dict(rows=sum(full_dates.values()),dates=dict(sorted(full_dates.items())),sha256=full_digest.hexdigest())
+    return records,groups,stats,full_stats
 
 
 def news_ids(path):
@@ -159,7 +197,7 @@ def news_ids(path):
 
 
 def split_stats(rows):
-    sizes=[len(row['candidates'])for row in rows];dates=Counter(row['time'].date().isoformat()for row in rows)
+    sizes=[row['candidate_count'] for row in rows];dates=Counter(row['time'].date().isoformat()for row in rows)
     return dict(rows=len(rows),groups=len({r['key']for r in rows}),candidates=sum(sizes),
         positive_labels=sum(len(r['positive'])for r in rows),candidate_min=min(sizes),candidate_max=max(sizes),
         dates=dict(sorted(dates.items())),timestamp_min=min(r['time']for r in rows).isoformat(),
@@ -183,10 +221,10 @@ def rebase(value,staging,output):
     return value
 
 
-def partition_request_groups(train,train_groups,test,args):
+def partition_request_groups(train,train_groups,test,args,source_dates):
     """Partition complete raw request groups without consulting labels or tests.
 
-    The explicit chronological profile is fixed to the documented small-data
+    The explicit chronological profile is fixed to the documented labeled
     seven-day roles. Unexpected dates fail rather than silently redefining a
     role. The random profile remains available for earlier software plans.
     """
@@ -194,13 +232,12 @@ def partition_request_groups(train,train_groups,test,args):
     if policy not in('random_groups','chronological'):
         raise ValueError('Unknown split policy')
     if policy=='chronological':
-        train_dates={row['time'].date().isoformat()for row in train}
-        test_dates={row['time'].date().isoformat()for row in test}
+        train_dates,test_dates=source_dates
         expected=set(CHRONOLOGICAL_TRAIN_DATES)|{CHRONOLOGICAL_DEV_DATE}
         if train_dates!=expected:
-            raise ValueError('Chronological MIND-small requires official train dates 2019-11-09 through 2019-11-14 exactly; observed '+str(sorted(train_dates)))
+            raise ValueError('Chronological split requires official train dates 2019-11-09 through 2019-11-14 exactly; observed '+str(sorted(train_dates)))
         if test_dates!={CHRONOLOGICAL_TEST_DATE}:
-            raise ValueError('Chronological MIND-small requires official dev dates 2019-11-15 only; observed '+str(sorted(test_dates)))
+            raise ValueError('Chronological split requires official dev dates 2019-11-15 only; observed '+str(sorted(test_dates)))
         dev_keys={row['key']for row in train if row['time'].date().isoformat()==CHRONOLOGICAL_DEV_DATE}
         if any(len({r['time'].date()for r in rows})!=1 for rows in train_groups.values()):
             raise ValueError('A raw request group crosses calendar dates')
@@ -249,7 +286,8 @@ def context_policy(args):
 
 def prepare(args):
     started=time.perf_counter()
-    if args.dataset!='MIND-small':raise NotImplementedError('MIND-200K requires an explicit large-data user sampler and full-source proxy scope; small is not a substitute')
+    if args.dataset not in ('MIND-small','MIND-200K'):raise ValueError('Unknown MIND dataset')
+    large=args.dataset=='MIND-200K'
     source_paths={role:Path(getattr(args,name)).resolve()for role,name in(('official_train','train_zip'),('official_dev','dev_zip'))}
     context_mode,selected_models=context_policy(args)
     graph_arg=getattr(args,'wikidata_graph',None)
@@ -264,7 +302,9 @@ def prepare(args):
         raise ValueError('Output may not overlap an input file')
     if type(args.seed)is not int or not 0<=args.seed<2**32:raise ValueError('Seed must be unsigned 32-bit')
     if not math.isfinite(args.dev_fraction)or not 0<args.dev_fraction<1:raise ValueError('Development fraction must be between zero and one')
-    if min(args.max_member_bytes,args.max_total_bytes)<1 or not math.isfinite(args.max_compression_ratio)or args.max_compression_ratio<1:
+    max_member=args.max_member_bytes if args.max_member_bytes is not None else (LARGE_MAX_MEMBER_BYTES if large else DEFAULT_MAX_MEMBER_BYTES)
+    max_total=args.max_total_bytes if args.max_total_bytes is not None else (LARGE_MAX_TOTAL_BYTES if large else DEFAULT_MAX_TOTAL_BYTES)
+    if min(max_member,max_total)<1 or not math.isfinite(args.max_compression_ratio)or args.max_compression_ratio<1:
         raise ValueError('ZIP limits must be positive and finite')
     archives={};inspections={}
     for role,path in source_paths.items():
@@ -272,7 +312,7 @@ def prepare(args):
         declared=getattr(args,'expected_train_sha256'if role=='official_train'else'expected_dev_sha256',None)
         if declared and(not re.fullmatch(r'[0-9a-fA-F]{64}',declared)or archives[role]['sha256']!=declared.lower()):
             raise ValueError('Declared source archive SHA-256 differs: '+role)
-        inspections[role]=inspect_archive(path,max_member_bytes=args.max_member_bytes,max_total_bytes=args.max_total_bytes,
+        inspections[role]=inspect_archive(path,max_member_bytes=max_member,max_total_bytes=max_total,
             max_compression_ratio=args.max_compression_ratio)
     graph_proof=fingerprint(graph)if graph is not None else None
     output.parent.mkdir(parents=True,exist_ok=True)
@@ -281,14 +321,34 @@ def prepare(args):
     staging=output.with_name(output.name+'.partial-'+uuid.uuid4().hex);staging.mkdir()
     try:
         raw={role:extract_selected(path,inspections[role],staging/'provenance/raw'/role)for role,path in source_paths.items()}
-        train,train_groups,train_source_stats=read_behaviors(raw['official_train']['behaviors.tsv']['path'],'official_train')
-        test,test_groups,test_source_stats=read_behaviors(raw['official_dev']['behaviors.tsv']['path'],'official_dev')
-        if set(train_groups)&set(test_groups):raise ValueError('Official train/dev share complete request groups; input provenance is inconsistent')
         known=news_ids(raw['official_train']['news.tsv']['path'])|news_ids(raw['official_dev']['news.tsv']['path'])
-        if any(not(set(row['history'])|set(row['candidates']))<=known for row in train+test):
-            raise ValueError('A behavior/history article is absent from the complete metadata union')
-        splits,development,source_roles,profile,temporal_validation=partition_request_groups(train,train_groups,test,args)
+        users,user_sample=sample_large_users(raw,args.seed,staging) if large else (None,None)
+        publication={} if large else None
+        full_stats={}
+        train,train_groups,train_source_stats,full_stats['official_train']=read_behaviors(
+            raw['official_train']['behaviors.tsv']['path'],'official_train',known,selected_users=users,publication=publication)
+        test,test_groups,test_source_stats,full_stats['official_dev']=read_behaviors(
+            raw['official_dev']['behaviors.tsv']['path'],'official_dev',known,selected_users=users,publication=publication)
+        for role,record in full_stats.items():
+            if record['sha256']!=raw[role]['behaviors.tsv']['sha256']:
+                raise ValueError('Extracted behavior rows changed during processing: '+role)
+        if set(train_groups)&set(test_groups):raise ValueError('Official train/dev share complete request groups; input provenance is inconsistent')
+        source_dates=tuple(set(full_stats[role]['dates']) for role in ('official_train','official_dev'))
+        splits,development,source_roles,profile,temporal_validation=partition_request_groups(train,train_groups,test,args,source_dates)
         stats={};files={};assets={};partition=hashlib.sha256()
+        if large:
+            if {key[0] for key in train_groups} | {key[0] for key in test_groups} != users:
+                raise ValueError('Selected users differ from the users retained in the two archives')
+            profile=profile.replace('mind_small','mind_200k')
+            source_roles={split:'selected MIND-200K user rows from '+role.replace('all ','') for split,role in source_roles.items()}
+            minimum_relative='provenance/large_impression_minima.json'
+            inputs={role:{k:members['behaviors.tsv'][k] for k in ('path','sha256','bytes')} for role,members in raw.items()}
+            write_json(staging/minimum_relative,dict(schema=1,timezone='unspecified_naive',
+                definition='Earliest candidate impression across all labeled MIND-Large train and dev requests, before user sampling.',
+                input_files=rebase(inputs,staging,output),
+                all_impressions_min={n:t.isoformat() for n,t in sorted(publication.items())}))
+            files[minimum_relative]=fingerprint(staging/minimum_relative)
+            files['provenance/sample_users.json']=user_sample['user_ids']
         with(staging/'request_mapping.jsonl').open('x',encoding='utf-8',newline='\n')as mapping:
             for split,rows in splits.items():
                 folder=staging/split;folder.mkdir()
@@ -303,12 +363,12 @@ def prepare(args):
                     source=raw[role][name];copied=copy_exact(source['path'],folder/name,source)
                     assets[split+'/'+name]=dict(source_archive_role=role,source=source,output=copied)
         for row in train:partition.update(row['raw'])
-        if partition.hexdigest()!=raw['official_train']['behaviors.tsv']['sha256']:
+        if partition.hexdigest()!=train_source_stats['sha256']:
             raise ValueError('Source row bytes were not preserved during group partitioning')
-        if files['train/behaviors.tsv']['bytes']+files['dev/behaviors.tsv']['bytes']!=raw['official_train']['behaviors.tsv']['bytes']:
-            raise ValueError('Source train rows were lost or duplicated')
-        if files['test/behaviors.tsv']['sha256']!=raw['official_dev']['behaviors.tsv']['sha256']:
-            raise ValueError('Official dev bytes were changed in the final test master')
+        if files['train/behaviors.tsv']['bytes']+files['dev/behaviors.tsv']['bytes']!=train_source_stats['bytes']:
+            raise ValueError('Selected source train rows were lost or duplicated')
+        if files['test/behaviors.tsv']['sha256']!=test_source_stats['sha256']:
+            raise ValueError('Selected official dev bytes were changed in the final test master')
         if stats['train/behaviors.tsv']['positive_labels']+stats['dev/behaviors.tsv']['positive_labels']!=train_source_stats['positive_labels']:
             raise ValueError('A source positive occurrence was lost')
         context_source=None
@@ -335,7 +395,7 @@ def prepare(args):
             outputs_created=context_mode=='required',dummy_vectors_created=False)
         files['request_mapping.jsonl']=fingerprint(staging/'request_mapping.jsonl')
         overlap={name:0 for name in('train_dev_group_overlap','train_test_group_overlap','dev_test_group_overlap')}
-        manifest=dict(schema=1,status='complete',profile=profile,dataset='MIND-small',created_utc=datetime.now(timezone.utc).isoformat(),
+        manifest=dict(schema=1,status='complete',profile=profile,dataset=args.dataset,created_utc=datetime.now(timezone.utc).isoformat(),
             output=str(output),seed=args.seed,fraction=1.0,fraction_scope='All labeled rows in the supplied archive roles; upstream authenticity depends on recorded input provenance.',
             historical_R2_reproduction=False,split_policy=development['policy'],source_roles=source_roles,
             context_feature_mode=context_mode,selected_models=selected_models,context_features=context_features,
@@ -351,10 +411,20 @@ def prepare(args):
             proxy=dict(status='not_generated_here',next_step='prepare_consistent_candidates.py computes complete first-impression minima across these three masters; histories are not appearance timestamps'),
             context=context_details,
             producer=fingerprint(Path(__file__)),context_helper=fingerprint(context_source)if context_source is not None else None,elapsed_seconds=time.perf_counter()-started,
-            notes=['MIND-200K is not constructed by this command and must not be substituted with MIND-small.',
-                'Only the four documented official ZIP assets are extracted; unsupported members are inventoried without execution.',
+            notes=['Only the four documented official ZIP assets are extracted; unsupported members are inventoried without execution.',
                 'The original ZIPs and graph are read-only. IMP masters preserve source row bytes, labels and order within each split.',
                 'Publication proxies and candidate files are separate downstream steps; no historical submission reproduction is asserted.'])
+        if large:
+            # In a sampled dataset these preservation assertions concern cohort rows only.
+            validation=manifest['validation']
+            for key in ('source_train_rows_partitioned_once','all_source_positive_occurrences_preserved','official_dev_is_byte_identical_final_test'):
+                del validation[key]
+            validation.update(all_sampled_users_represented=True,cohort_train_rows_partitioned_once=True,cohort_positive_occurrences_preserved=True,
+                              selected_official_dev_is_byte_identical_final_test=True)
+            manifest.update(user_sample=user_sample,full_source_minimum_map=files[minimum_relative],
+                cohort_statistics=manifest['source_statistics'],source_statistics=full_stats,
+                fraction_scope='All labeled requests of the sampled MIND-Large users across the two input archives.',
+                proxy=dict(status='full_source_minimum_map_ready',scope='All candidate impressions from the labeled MIND-Large train and dev archives'))
         proofs={**{role:archives[role]for role in archives},**({'wikidata_graph':graph_proof}if graph_proof is not None else{})}
         for name,proof in proofs.items():
             actual=Path(proof['path']).stat()
@@ -374,7 +444,8 @@ def prepare(args):
 
 def parser():
     result=argparse.ArgumentParser(description=__doc__)
-    result.add_argument('--dataset',choices=('MIND-small',),default='MIND-small')
+    result.add_argument('--dataset',choices=('MIND-small','MIND-200K'),default='MIND-small',
+        help='MIND-200K samples 200,000 unique users from the labeled MIND-Large train and dev archives')
     result.add_argument('--train-zip',type=Path,required=True)
     result.add_argument('--dev-zip',type=Path,required=True,help='Official labeled dev archive; used as final test source')
     result.add_argument('--wikidata-graph',type=Path,help='Explicit local graph TSV or ZIP, required in context feature mode required; no automatic download')
@@ -388,8 +459,8 @@ def parser():
     result.add_argument('--dev-fraction',type=float,default=0.05)
     result.add_argument('--expected-train-sha256')
     result.add_argument('--expected-dev-sha256')
-    result.add_argument('--max-member-bytes',type=int,default=DEFAULT_MAX_MEMBER_BYTES)
-    result.add_argument('--max-total-bytes',type=int,default=DEFAULT_MAX_TOTAL_BYTES)
+    result.add_argument('--max-member-bytes',type=int,help='Uncompressed bytes per ZIP member (512 MiB small, 4 GiB large)')
+    result.add_argument('--max-total-bytes',type=int,help='Uncompressed bytes per ZIP archive (1 GiB small, 8 GiB large)')
     result.add_argument('--max-compression-ratio',type=float,default=DEFAULT_MAX_RATIO)
     return result
 

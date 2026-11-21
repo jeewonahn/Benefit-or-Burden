@@ -368,6 +368,8 @@ def main():
     else:
         manifest = {'schema': 1, 'status': 'preparing', 'model': 'DIGAT', 'train_type': args.train_type,
                     'seed': args.seed, 'profile': profile(args), 'input_binding': binding,
+                    'dataset': (candidate_profile or {}).get('dataset', 'MIND-small'),
+                    'upstream_dataset_key': 'MIND-small',
                     'source_snapshot': snapshot, 'historical_R2_reproduction': False,
                     'training_reused': False, 'epoch_records': [], 'evaluations': {},
                     'test_chunks': {}, 'execution_segments': [], 'cleanup_records': [],

@@ -30,17 +30,25 @@ RUN_MIND_PIPELINE.cmd --work-dir "../tors_runs/mind_small" --models all6 --downl
 RUN_MIND_PIPELINE.cmd --work-dir "../tors_runs/mind_small" --check-only
 ~~~
 
+For **MIND-200K**, choose the dataset when creating the study. This downloads the labeled MIND-Large train and dev archives and samples exactly 200,000 distinct users without replacement from their combined user IDs. All requests from the selected users are retained in the IMP masters. The study records the seed and the selected IDs so the cohort can be recreated with the same inputs.
+
+~~~cmd
+RUN_MIND_PIPELINE.cmd --dataset MIND-200K --work-dir "../tors_runs/mind_200k" --models all6 --download --accept-mind-license --prepare-only
+RUN_MIND_PIPELINE.cmd --work-dir "../tors_runs/mind_200k" --check-only
+RUN_MIND_PIPELINE.cmd --work-dir "../tors_runs/mind_200k" --execute --resume
+~~~
+
 Preparation performs these steps:
 
-1. Download `MINDsmall_train.zip` and `MINDsmall_dev.zip` using the URLs maintained by [Microsoft Recommenders](https://github.com/recommenders-team/recommenders/blob/main/recommenders/datasets/mind.py).
+1. Download `MINDsmall_train.zip` and `MINDsmall_dev.zip` (the default) or `MINDlarge_train.zip` and `MINDlarge_dev.zip` (MIND-200K) using the URLs maintained by [Microsoft Recommenders](https://github.com/recommenders-team/recommenders/blob/main/recommenders/datasets/mind.py).
 2. Register GloVe **6B 300d** and the pinned MPNet files for DIGAT.
 3. Preserve complete request groups and split original dates into **train November 9-13, dev November 14, and test November 15**.
-4. Create `news_publish_time.tsv` from the earliest clicked or unclicked impression of each article.
+4. Create `news_publish_time.tsv` from the earliest clicked or unclicked impression of each article. For MIND-200K this uses the complete labeled Large archives, including impressions from users outside the cohort.
 5. Generate IMP/RandS50 train/dev files and IMP, RandS30/90/150, and full Total test candidates.
 
 The publication-time value is a proxy. Negatives satisfy `t - 24h < proxy < t`, exclude request history and all current positives, and are sampled without replacement. The clicked target is retained independently of the negative window. See [candidate construction](docs/CONSISTENT_CANDIDATES.md).
 
-This workflow uses five training days and a held-out development day; the manuscript reference tables use six training days. MIND-200K is a separate population and is not generated from the small archives. [Local archive inputs](docs/FROM_RAW_MIND.md) are supported.
+This workflow uses five training days and a held-out development day; the manuscript reference tables use six training days. A fresh MIND-200K draw has its own user list. See [data preparation](docs/FROM_RAW_MIND.md) for local archive inputs and sample provenance.
 
 ## 3. Train and evaluate
 

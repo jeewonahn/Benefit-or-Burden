@@ -68,7 +68,7 @@ def validate_total(args):
     verify_file(args.data_root / 'manifest.json', spec['dataset_manifest'])
     data = read_json(args.data_root / 'manifest.json')
     if data.get('fraction') != 1.0:
-        raise ValueError('This experiment requires the fixed full MIND-Small request split')
+        raise ValueError('This experiment requires the full prepared cohort request split')
     if consistent:
         paths = evaluation_paths(args.data_root, args.matched_candidate_profile)
         if paths['total'] != args.full_total_behaviors:
@@ -152,7 +152,9 @@ def configure_development(args):
 def nnr_runtime_arguments(args, batch):
     """Forward the actual matching dev protocol into the legacy corpus loader."""
     ne, ue = MODELS[args.model]
-    return ['converged_nnr','--mode','train','--dataset','small','--news_encoder',ne,
+    profile = getattr(args, 'matched_candidate_profile', None) or {}
+    dataset = {'MIND-small': 'small', 'MIND-200K': '200k'}[profile.get('dataset', 'MIND-small')]
+    return ['converged_nnr','--mode','train','--dataset',dataset,'--news_encoder',ne,
         '--user_encoder',ue,'--train_type',args.train_type,'--dev_type',args.dev_protocol,'--test_type','imp',
         '--data_root',str(args.data_root),'--embedding_root',str(args.embedding_root),
         '--seed',str(args.seed),'--epoch',str(args.max_epochs),'--batch_size',str(batch['value'])]

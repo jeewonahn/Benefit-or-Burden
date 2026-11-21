@@ -25,6 +25,8 @@ The raw-MIND workflow uses train November 9-13 and dev November 14. Request grou
 
 The RandS50 file has up to 50 unique negatives per positive; the optimizer separately samples four slots. Runners record effective settings. Upstream defaults can differ from this released configuration.
 
+For MIND-200K, the NNR runner selects its upstream `200k` preset (dropout 0.2 and four GCN layers). The explicit epoch and development settings above still apply. DIGAT uses the prepared cohort paths and records the study dataset separately from its upstream `MIND-small` key, which selects the labeled-test format and cache filenames.
+
 ## Checkpoint selection
 
 Each epoch evaluates the matching dev file with:

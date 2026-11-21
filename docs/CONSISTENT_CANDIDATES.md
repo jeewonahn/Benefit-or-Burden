@@ -4,7 +4,7 @@
 
 ## Publication-time proxy
 
-For each article in the IMP masters, use the minimum timestamp across clicked and unclicked impression candidates. `news_publish_time.tsv` records this proxy. History-only or metadata-only appearances receive no invented timestamp.
+For each article, use the minimum timestamp across clicked and unclicked impression candidates. MIND-Small uses the IMP masters. MIND-200K uses both complete labeled MIND-Large source archives, even when the earliest observation was made by a user outside the sampled cohort. Only the 200,000 selected users contribute training or evaluation requests. `news_publish_time.tsv` records the proxy. History-only or metadata-only appearances receive no invented timestamp.
 
 It is first-observed impression time, not publisher time. Dataset provenance preserves source coverage, original clock convention, and the observed minimum map.
 

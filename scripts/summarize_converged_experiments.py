@@ -614,7 +614,7 @@ def main():
         'request_groups_sha256':file_hash(args.output/'request_groups.json'),'samples':tables['samples']})
     lines=['# Convergence-run Tables 2, 3 and 5','',
            'New measured results, not original-paper reference values or exact R2 reproduction.',
-           f'All supplied MIND-Small master requests before recorded zero-negative eligibility exclusions; candidate/split seed {declared_candidate_seed(plan)}; paired training seeds: {", ".join(map(str,seeds))}.',
+           f'All supplied {plan.get("dataset", "MIND-Small")} master requests before recorded zero-negative eligibility exclusions; candidate/split seed {declared_candidate_seed(plan)}; paired training seeds: {", ".join(map(str,seeds))}.',
            (f'Values below are mean ± sample SD across {len(seeds)} training seeds.' if len(seeds)>1
             else 'Values below are single-seed results; training-seed sample SD is unavailable (NA/null).'),
            'Table3 test resamples are not training replicates.',

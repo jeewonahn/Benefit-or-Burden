@@ -10,7 +10,9 @@ from collections import Counter,defaultdict
 from datetime import datetime,timezone
 import hashlib,json,os,shutil,sys,time,uuid
 from candidate_policy import PROFILE,RECIPE,PublicationIndex,sample_negative_prefixes,parse_timestamp
-from consistent_candidate_profile import validate_consistent_candidate_profile,OUTPUT_FILES
+from consistent_candidate_profile import (validate_consistent_candidate_profile, OUTPUT_FILES,
+    LARGE_MASTER_MAP, LARGE_PROXY_SCOPE, MASTER_MANIFEST_COPY, MINIMUM_MAP, SAMPLED_USER_IDS,
+    verify_large_minimum_source)
 SOURCE=TARGET=STAGE=None
 START=0.0
 TIMEFMT='%m/%d/%Y %I:%M:%S %p'
@@ -119,6 +121,27 @@ def _source_expected(manifest,relative,asset=False):
     item=manifest.get('assets',{}).get(relative,{}) if asset else manifest.get('output_files',{}).get(relative)
     return item.get('output') if asset else item
 
+
+def large_output_bound(index, records_by_split, source_proofs):
+    """Budget for files still to be written, using each request's actual availability window."""
+    token_bytes = max(len(news.encode('utf-8')) + 3 for news in index.ids)
+    total = source_proofs['test']['bytes']
+    for split, records in records_by_split.items():
+        for record in records:
+            left, right = index.window_bounds(datetime.strptime(record['head'][2], TIMEFMT))
+            window = right - left
+            # All history/positive exclusions can only shrink this count.
+            if split == 'test':
+                sizes = (min(30,window), min(90,window), min(150,window), window)
+            else:
+                sizes = (min(50,window),)
+            header = sum(len(value.encode('utf-8'))+1 for value in record['head'][1:]) + 64
+            # Allow for one GT, request/positive mapping records and exclusion evidence.
+            n_positive = len(record['positives'])
+            total += n_positive * (len(sizes)*(header+token_bytes) + sum(sizes)*token_bytes
+                                    + 2048 + 8*token_bytes)
+    return total
+
 def prepare(args):
     global SOURCE,TARGET,STAGE,START,copied,FIRST_MIN,CLICK_MIN
     START=time.perf_counter();copied={};FIRST_MIN={};CLICK_MIN={}
@@ -142,6 +165,7 @@ def prepare(args):
     STAGE.mkdir();(STAGE/'provenance').mkdir()
     source_manifest=read(SOURCE/'manifest.json') if (SOURCE/'manifest.json').is_file() else None
     source_manifest_proof=fingerprint(SOURCE/'manifest.json') if source_manifest else None
+    large = (source_manifest or {}).get('dataset') == 'MIND-200K'
     status('Copying unchanged masters and assets; source files are never rewritten')
     assets={}
     for split in ('train','dev','test'):
@@ -171,11 +195,38 @@ def prepare(args):
         master_stats[relative]=dict(rows=len(records),candidates=sum(sizes),positive_labels=sum(len(r['positives'])for r in records),
             candidate_min=min(sizes),candidate_max=max(sizes),groups=len(groups))
     if not FIRST_MIN or not set(FIRST_MIN)<=known:raise ValueError('Observed article has no metadata; no implicit universe shrink is allowed')
-    publication=dict(FIRST_MIN)
+    publication=FIRST_MIN
     for records in records_by_split.values():
         if any(not set(record['head'][3].split())<=known for record in records):raise ValueError('History article has no metadata')
-    minimum_relative='provenance/observed_first_impression_min.json'
-    if args.source_minimum_map:
+    minimum_relative=MINIMUM_MAP
+    if large:
+        copy_verified(SOURCE/'manifest.json',MASTER_MANIFEST_COPY,source_manifest_proof)
+        sample = source_manifest.get('user_sample',{})
+        if not sample.get('user_ids'):
+            raise ValueError('MIND-200K requires a pinned sample of user IDs')
+        cohort_pin = copy_verified(SOURCE/SAMPLED_USER_IDS,SAMPLED_USER_IDS,sample['user_ids'])
+        observed_users = {key[0] for groups in groups_by_split.values() for key in groups}
+        selected = read(STAGE/SAMPLED_USER_IDS)
+        if (not isinstance(selected,list) or len(observed_users)!=sample.get('count')
+                or len(selected)!=len(observed_users) or set(selected)!=observed_users):
+            raise ValueError('Sampled user list differs from users in the three MIND-200K masters')
+        pin = source_manifest.get('full_source_minimum_map')
+        if not pin:
+            raise ValueError('MIND-200K requires the pinned first-impression map from full MIND-Large')
+        map_copy = copy_verified(SOURCE/LARGE_MASTER_MAP,minimum_relative,pin)
+        provided = read(STAGE/minimum_relative)
+        verify_large_minimum_source(source_manifest,provided,map_copy)
+        full_map = provided.get('all_impressions_min')
+        if not isinstance(full_map,dict) or not full_map:
+            raise ValueError('Empty full MIND-Large first-impression map')
+        publication = {news:parse_timestamp(stamp) for news,stamp in full_map.items()}
+        if publication.keys() - known:
+            raise ValueError('Full MIND-Large first-impression map contains an article without metadata')
+        if any(news not in publication or publication[news]>stamp for news,stamp in FIRST_MIN.items()):
+            raise ValueError('Full MIND-Large first impressions must cover and precede or equal sampled minima')
+        if args.source_minimum_map and read(args.source_minimum_map).get('all_impressions_min')!=full_map:
+            raise ValueError('Supplied minimum map differs from the pinned full MIND-Large map')
+    elif args.source_minimum_map:
         provided=read(args.source_minimum_map)
         expected={news:parse_timestamp(when)for news,when in provided.get('all_impressions_min',{}).items()}
         if expected!=publication:raise ValueError('Supplied minimum map is not the complete exact minimum of the supplied IMP masters')
@@ -192,7 +243,8 @@ def prepare(args):
     # Conservative size preflight; candidate generation below never truncates to fit disk.
     test_positives=master_stats['test/behaviors.tsv']['positive_labels']
     largest_token=max(len(n.encode())+3 for n in publication)
-    upper_bytes=test_positives*(len(publication)*largest_token+1024)+sum(p['bytes']for p in source_proofs.values())
+    upper_bytes=(large_output_bound(index,records_by_split,source_proofs) if large else
+                 test_positives*(len(publication)*largest_token+1024)+sum(p['bytes']for p in source_proofs.values()))
     if shutil.disk_usage(TARGET.parent).free<upper_bytes*1.1:
         raise ValueError('Insufficient disk headroom for conservative full-Total output bound')
     exclusions=Writer('exclusions.jsonl');mapping=Writer('candidate_mapping.jsonl');evaluation_map=Writer('evaluation_mapping.jsonl')
@@ -209,7 +261,7 @@ def prepare(args):
             for record in records:
                 row,head,positives,key=(record[k]for k in('source_row','head','positives','key'))
                 gsha=group_sha(key)
-                pool=index.eligible(datetime.strptime(head[2],TIMEFMT),head[3].split(),groups[key])
+                pool=index.eligible_window(datetime.strptime(head[2],TIMEFMT),head[3].split(),groups[key])
                 counts['source_rows']+=1;counts['source_positives']+=len(positives)
                 if not pool:
                     counts['excluded_rows']+=1;counts['excluded_positives']+=len(positives);excluded_groups.add(gsha)
@@ -256,6 +308,9 @@ def prepare(args):
         current_positive_scope='Union within the same (user,timestamp,normalized full history) request group; not later user clicks.',
         metadata_universe=dict(news_ids=len(known),all_proxy_IDs_present=True),producer=producer)
     cert.update(declaration_fields(context))
+    if large:
+        cert.update(dataset='MIND-200K',publication_scope=LARGE_PROXY_SCOPE,
+                    source_master_copy=relative_fp(STAGE/MASTER_MANIFEST_COPY),user_ids=cohort_pin)
     write_json(STAGE/'consistent_candidate_manifest.json',cert)
     manifest=dict(schema=2,status='complete',created_utc=now(),seed=args.seed,fraction=1.0,
         fraction_scope='All supplied source master rows; this does not establish official dataset completeness or historical submission provenance.',
@@ -268,6 +323,9 @@ def prepare(args):
             'Own GT is always retained for eligible requests; zero-negative requests are logged and excluded only from derivatives.',
             'The RandS50 pool is separate from the optimizer negative-sampling count.'])
     manifest.update(declaration_fields(context))
+    if large:
+        manifest.update(dataset='MIND-200K',publication_scope=LARGE_PROXY_SCOPE,
+                        user_sample=dict(sample,user_ids=cohort_pin))
     for relative,item in copied.items():
         if relative.endswith('/behaviors.tsv'):manifest['output_files'][relative]=dict(item['output'],path=str(TARGET/relative))
     for name,item in outputs.items():manifest['output_files'][item['path']]=dict(item,path=str(TARGET/item['path']))
@@ -307,7 +365,7 @@ def parser():
     result.add_argument('--source-data-root',type=Path,required=True,help='Disjoint labeled IMP train/dev/test masters plus split news/entity/context assets')
     result.add_argument('--output',type=Path,required=True,help='New dataset directory; inputs are never overwritten')
     result.add_argument('--seed',type=int,default=42)
-    result.add_argument('--source-minimum-map',type=Path,help='Optional independently reviewed JSON all_impressions_min; must exactly match the supplied masters')
+    result.add_argument('--source-minimum-map',type=Path,help='Optional independent map to compare against the specified dataset scope; MIND-200K always uses its pinned full MIND-Large map')
     result.add_argument('--control-output',type=Path,help='Optional separate receipt/Total descriptor directory')
     return result
 

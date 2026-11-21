@@ -1,4 +1,4 @@
-# MIND-Small download and preprocessing
+# MIND-Small and MIND-200K data preparation
 
 Use the main pipeline to create a study from original MIND archives. It registers pretrained files, preserves master requests, builds the publication-time proxy and candidates, and seals the inputs.
 
@@ -12,10 +12,26 @@ RUN_MIND_PIPELINE.cmd --work-dir "../tors_runs/mind_small" --models all6 --downl
 
 ZIPs and source/size/SHA-256 receipts remain in `<WORK>/downloads`. `--mind-train-sha256` and `--mind-dev-sha256` additionally check supplied trusted checksums.
 
+## Choose the dataset
+
+| Dataset option | Source ZIPs | Requests used for the study |
+| --- | --- | --- |
+| `MIND-small` (default) | `MINDsmall_train.zip`, `MINDsmall_dev.zip` | All labeled requests |
+| `MIND-200K` | `MINDlarge_train.zip`, `MINDlarge_dev.zip` | All labeled requests from 200,000 sampled users |
+
+The 200K sampler draws users uniformly without replacement from the distinct IDs in the two labeled archives. A user who appears in both belongs to the sampling population once. The same cohort is used throughout training, validation, and testing. The official unlabeled MIND-Large test archive is not an input. A new study draws a seed by default; pass `--seed <INTEGER>` with the same archives to repeat a draw.
+
+The master directory records the selected IDs in `<WORK>/masters/provenance/sample_users.json`. Its manifest records the population size, sample size, seed and file hash. The sampled IDs and downloaded data stay in the study directory. The published paper's MIND-200K reference tables describe its historical cohort; a new draw may produce different statistics and metrics.
+
 ## Use local files
 
 ~~~cmd
 RUN_MIND_PIPELINE.cmd --work-dir "../tors_runs/mind_small" --models all6 --train-zip "../downloads/MINDsmall_train.zip" --dev-zip "../downloads/MINDsmall_dev.zip" --glove-archive "../downloads/glove.6B.zip" --sag-model-source "../downloads/all-mpnet-base-v2" --prepare-only
+~~~
+
+~~~cmd
+RUN_MIND_PIPELINE.cmd --dataset MIND-200K --work-dir "../tors_runs/mind_200k" --models all6 --train-zip "../downloads/MINDlarge_train.zip" --dev-zip "../downloads/MINDlarge_dev.zip" --glove-archive "../downloads/glove.6B.zip" --sag-model-source "../downloads/all-mpnet-base-v2" --prepare-only
+RUN_MIND_PIPELINE.cmd --work-dir "../tors_runs/mind_200k" --execute --resume
 ~~~
 
 NAML/all5 require no MPNet source. `--glove-text` accepts the 300d text; `--embedding-root` accepts registered GloVe assets. See [asset registration](ASSET_PREPARATION.md).
@@ -24,7 +40,7 @@ NAML/all5 require no MPNet source. `--glove-text` accepts the 300d text; `--embe
 
 Dates are checked, then assigned to train November 9-13, dev November 14, and test November 15. User/time/normalized-full-history groups remain intact.
 
-The proxy is each article's earliest clicked/unclicked impression in the supplied masters. History-only or metadata-only articles receive no invented timestamp.
+The proxy is each article's earliest clicked or unclicked impression. MIND-Small uses its supplied masters. MIND-200K scans both complete labeled Large archives, so removing users from the study does not move an article's first observation forward. History-only or metadata-only articles receive no invented timestamp.
 
 ~~~text
 <WORK>/dataset/
@@ -70,5 +86,5 @@ RUN_MIND_PIPELINE.cmd --work-dir "../tors_runs/mind_small" --execute --resume
 
 Preparation records the random seed, sources, inputs, and model list. All6 execution produces 12 trainings/60 evaluations and Tables2/3/5. See [Usage](USAGE.md) for output/configuration files and resume commands.
 
-This five-day training split reserves one day for development; manuscript reference tables use six training days. MIND-200K needs its own sampled-user data. Dataset rows, pretrained weights, and checkpoints remain outside Git.
+This five-day training split reserves one day for development; manuscript reference tables use six training days. Dataset rows, pretrained weights, and checkpoints remain outside Git.
 
